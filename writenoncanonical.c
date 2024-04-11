@@ -6,7 +6,7 @@
 #include <termios.h>
 #include <stdio.h>
 
-#define BAUDRATE B38400
+#define BAUDRATE B9600
 #define MODEMDEVICE "/dev/ttyS1"
 #define _POSIX_SOURCE 1 /* POSIX compliant source */
 #define FALSE 0
@@ -18,7 +18,8 @@ int main(int argc, char** argv)
 {
     int fd,c, res;
     struct termios oldtio,newtio;
-    unsigned char buffer[4];
+    unsigned char buffer[5];
+    unsigned char resp[5];
     int i, sum = 0, speed = 0;
 
     if ( (argc < 2) ||
@@ -73,14 +74,26 @@ int main(int argc, char** argv)
 
 
 	buffer[0] = 0x5c; 
-	buffer[1] = 0x03; 
-	buffer[2] = 0x08; 
-	buffer[3] = 0x04; 
+	buffer[1] = 0x01; 
+	buffer[2] = 0x07; 
+	buffer[3] = buffer[1]^buffer[2]; 
 	buffer[4] = buffer[0]; 
 
-    res = write(fd,buffer,4);
+    res = write(fd,buffer,5);
     printf("%d bytes written\n", res);
-
+  while(STOP==FALSE)
+  {
+    res= read(fd,resp,5);
+    if(resp[2]==0x06) 
+    {
+        printf("Received the UA\n");
+        STOP=TRUE;
+    }
+    for(int i=0; i<res;i++)
+    {
+        printf("%x\n",resp[i]);
+    }
+  }
 
     sleep(1);
     if ( tcsetattr(fd,TCSANOW,&oldtio) == -1) {
@@ -92,3 +105,4 @@ int main(int argc, char** argv)
     close(fd);
     return 0;
 }
+
