@@ -5,14 +5,28 @@
 #include <fcntl.h>
 #include <termios.h>
 #include <stdio.h>
+#include <string.h>
 
+
+//ROLE
+#define NOT_DEFINED -1
+#define TRANSMITTER 0
+#define RECEIVER 1
+
+//size
+#define MAX_PAYLOAD_SIZE 1000
+
+//connection
 #define BAUDRATE B9600
 #define _POSIX_SOURCE 1 /* POSIX compliant source */
+#define MAX_RETRANSMISSIONS_DEFAULT 3
+#define TIMEOUT_DEFAULT 4
+
 #define FALSE 0
 #define TRUE 1
 
+//state machine
 volatile int STOP=FALSE;
-
 int state=0;
 #define START 0
 #define FLAGRCV 1
@@ -21,6 +35,48 @@ int state=0;
 #define BCCOK 4
 #define STOP_STATE_MACHINE 5
 
+typedef struct linkLayer{
+char serialPort[50];
+int role; //defines the role of the program: 0==Transmitter, 1=Receiver
+int baudRate;
+int numTries;
+int timeOut;
+} linkLayer;
+
+void statemachine(unsigned char byte);
+int llopen(linkLayer connectionParamaters);
+
+struct termios oldtio,newtio;
+
+int main(int argc, char** argv)
+{
+    char buf[255];
+    
+    if ( (argc < 2) ||
+         ((strcmp("/dev/ttyS0", argv[1])!=0) &&
+          (strcmp("/dev/ttyS1", argv[1])!=0) )) {
+        printf("Usage:\tnserial SerialPort\n\tex: nserial /dev/ttyS1\n");
+        exit(1);
+    }
+
+    linkLayer connection;
+    strcpy(connection.serialPort,argv[1]);
+    connection.role = 1;
+    connection.baudRate = BAUDRATE;
+    connection.numTries=0;
+    connection.timeOut = TIMEOUT_DEFAULT;
+
+    int fd = llopen(connection);
+
+
+    strcpy(buf, "SIUU");
+    int res = write(fd,buf,5);
+    printf("I should have written something on the other side\n");
+
+    tcsetattr(fd,TCSANOW,&oldtio);
+    close(fd);
+    return 0;
+}
 
 void statemachine(unsigned char byte)
 {
@@ -52,28 +108,16 @@ void statemachine(unsigned char byte)
     }
 }
 
-int main(int argc, char** argv)
+int llopen(linkLayer connectionParameters)
 {
     int fd,c, res;
-    struct termios oldtio,newtio;
     char buf[255];
-
-    if ( (argc < 2) ||
-         ((strcmp("/dev/ttyS0", argv[1])!=0) &&
-          (strcmp("/dev/ttyS1", argv[1])!=0) )) {
-        printf("Usage:\tnserial SerialPort\n\tex: nserial /dev/ttyS1\n");
-        exit(1);
-    }
-
-
     /*
     Open serial port device for reading and writing and not as controlling tty
     because we don't want to get killed if linenoise sends CTRL-C.
     */
-
-
-    fd = open(argv[1], O_RDWR | O_NOCTTY );
-    if (fd < 0) { perror(argv[1]); exit(-1); }
+    fd = open(connectionParameters.serialPort, O_RDWR | O_NOCTTY );
+    if (fd < 0) { perror(connectionParameters.serialPort); exit(-1); }
 
     if (tcgetattr(fd,&oldtio) == -1) { /* save current port settings */
         perror("tcgetattr");
@@ -107,7 +151,7 @@ int main(int argc, char** argv)
     printf("New termios structure set\n");
 
     while (STOP==FALSE) {       /* loop for input */
-        res = read(fd,buf,5);   /* returns after 5 chars have been input */
+        res = read(fd,buf,5); 
 
         for(int i=0;i<res;i++) statemachine(buf[i]);
         printf("STATE IS: %d\n",state);
@@ -122,16 +166,6 @@ int main(int argc, char** argv)
         state=START;
     }
 
-
-
-
-    /*
-    O ciclo WHILE deve ser alterado de modo a respeitar o indicado no guião
-    */
-
     tcsetattr(fd,TCSANOW,&oldtio);
-    close(fd);
-    return 0;
+    return (fd);
 }
-
-
