@@ -45,6 +45,8 @@ int timeOut;
 void statemachine(unsigned char byte);
 int llopen(linkLayer connectionParamaters);
 
+int fd;
+
 int main(int argc, char** argv)
 {
     char buf[255];
@@ -63,15 +65,19 @@ int main(int argc, char** argv)
     connection.numTries=0;
     connection.timeOut = TIMEOUT_DEFAULT;
 
-    int fd = llopen(connection);
+    int success = llopen(connection);
 
+    if(success)
+    {
+        //TESTING
+        strcpy(buf, "SIUU (write)");
+        int res = write(fd,buf,13);
 
-    strcpy(buf, "SIUU (write)");
-    int res = write(fd,buf,13);
-    printf("I should have written something on the other side\n");
+        tcsetattr(fd,TCSANOW,&oldtio);
+        close(fd);
+    }
+    else printf("UNSUCCESSFUL\n");
 
-    tcsetattr(fd,TCSANOW,&oldtio);
-    close(fd);
     return 0;
 }
 
@@ -107,7 +113,7 @@ void statemachine(unsigned char byte)
 
 int llopen(linkLayer connectionParameters)
 {
-    int fd,c, res;
+    int c, res;
     char buf[255];
     char setter[255];
 
@@ -168,5 +174,5 @@ int llopen(linkLayer connectionParameters)
     }
 
     tcsetattr(fd,TCSANOW,&oldtio);
-    return (fd);
+    return (1);
 }
