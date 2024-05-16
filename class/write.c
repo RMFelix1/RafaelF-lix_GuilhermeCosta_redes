@@ -44,8 +44,16 @@ int timeOut;
 
 void statemachine(unsigned char byte);
 int llopen(linkLayer connectionParamaters);
+int llwrite(unsigned char *buffer, int length);
+int llread(unsigned char *buffer);
+void statemachineAck(unsigned char byte);
 
 int fd;
+struct termios oldtio,newtio;
+
+linkLayer connection;
+//control switch
+unsigned char c = 0x00;
 
 int main(int argc, char** argv)
 {
@@ -58,7 +66,6 @@ int main(int argc, char** argv)
         exit(1);
     }
 
-    linkLayer connection;
     strcpy(connection.serialPort,argv[1]);
     connection.role = 0;
     connection.baudRate = BAUDRATE;
@@ -71,11 +78,15 @@ int main(int argc, char** argv)
     {
         //TESTING
         strcpy(buf, "SIUU (write)");
-        int res = write(fd,buf,13);
+        int res = llwrite(buf,13);
+
+        printf("%d",res);
+
 
         tcsetattr(fd,TCSANOW,&oldtio);
         close(fd);
     }
+    
     else printf("UNSUCCESSFUL\n");
 
     return 0;
@@ -156,18 +167,18 @@ int llopen(linkLayer connectionParameters)
     printf("New termios structure set\n");
 
     setter[0]=0x5c;
-    setter[0]=0x01;
-    setter[0]=0x07;
-    setter[0]=setter[1]^setter[2];
-    setter[0]=setter[0];
+    setter[1]=0x01;
+    setter[2]=0x07;
+    setter[3]=setter[1]^setter[2];
+    setter[4]=setter[0];
 
     res = write(fd,setter,5);
     printf("%d bytes written\n",res);
-
+    
     while (STOP==FALSE) {       /* loop for input */
         res = read(fd,buf,5); 
 
-        for(int i=0;i<res;i++) statemachine(buf[i]);
+        for(int i=0;i<res;i++) statemachine(buf[i]); 
         printf("STATE IS: %d\n",state);
         if(state==5) STOP=TRUE;
         state=START;
@@ -175,4 +186,89 @@ int llopen(linkLayer connectionParameters)
 
     tcsetattr(fd,TCSANOW,&oldtio);
     return (1);
+}
+int llwrite(unsigned char *buffer,int length)
+{
+    unsigned char send[255];
+
+    send[0]=0x5c;
+    
+    if (connection.role==0) send[1]=0x01;
+    else send[1]=0x03;
+
+    send[2] = c;
+    if(c==0x00) c=0x01;
+    else c=0x00;
+    
+    send[3]=send[1]^send[2];
+
+    unsigned char bcc2 = 0x00;
+
+    for(int i=0;i<length;i++)
+    {
+        send[4+i]=buffer[i];
+        bcc2 = bcc2^buffer[i];
+    }
+
+    send[4+length]=bcc2;
+    send[4+length+1]=0x5c;
+    for (int j=0; j<4+length+2;j++)
+    {
+        printf("%x\n",send[j]);
+
+    }
+
+    int tamanho = write(fd,send,4+length+2);
+
+    unsigned char ack[5];
+    read(fd,ack,5);
+
+    for(int i=0; i<5;i++) statemachineAck(ack[i]);
+    if(state==STOP_STATE_MACHINE)
+    {
+        state=START;
+        printf("DEU ACK\n");
+        return tamanho;
+    }
+    return -1;
+    //talvez em vez de return, fazer read esperando pelo ACK
+}
+void statemachineAck(unsigned char byte)
+{
+    switch (state)
+    {
+        case START:
+            if(byte==0x5c) state = FLAGRCV;
+            break;
+        case FLAGRCV:
+            if(byte==0x03) state = ARCV;
+            else if(byte==0x5c) state = FLAGRCV;
+            else state = START;   
+            break;
+        case ARCV:
+            if(c==0x00)
+                if(byte==0x01) state = CRCV;
+                else if(byte==0x5c) state = FLAGRCV;
+                else state = START;
+            if(c==0x01)
+                if(byte==0x11) state = CRCV;
+                else if(byte==0x5c) state = FLAGRCV;
+                else state = START;
+            break;
+        case CRCV:
+            if(c==0x00)
+                if(byte==0x03^0x01) state = CRCV;
+                else if(byte==0x5c) state = FLAGRCV;
+                else state = START;
+            if(c==0x01)
+                if(byte==0x11^0x03) state = CRCV;
+                else if(byte==0x5c) state = FLAGRCV;
+                else state = START; 
+            break;  
+        case BCCOK:  
+            if(byte==0x5c) state = STOP_STATE_MACHINE;
+            else state = START;  
+            break;
+            
+    }
 }
