@@ -64,19 +64,19 @@ unsigned char response[255];
 unsigned char bcc2check = 0x00;
 
 //default control characters
-unsigned char defW[5];
-defW[0]=0x5c;
-defW[1]=0x01;
-defW[2]=0x07;
-defW[3]=defW[1]^defW[2];
-defW[4]=0x5c;
+//unsigned char defW[5];
+//defW[0]=0x5c;
+//defW[1]=0x01;
+//defW[2]=0x07;
+//defW[3]=defW[1]^defW[2];
+//defW[4]=0x5c;
 //
-unsigned char defR[5];
-defR[0]=0x5c;
-defR[1]=0x03;
-defR[2]=0x06;
-defR[3]=defR[1]^defR[2];
-defR[4]=0x5c;
+//unsigned char defR[5];
+//defR[0]=0x5c;
+//defR[1]=0x03;
+//defR[2]=0x06;
+//defR[3]=defR[1]^defR[2];
+//defR[4]=0x5c;
 //
 
 int main(int argc, char** argv)
@@ -101,9 +101,7 @@ int main(int argc, char** argv)
     if(success)
     {
         //TESTING
-        strcpy(buf, "SIUU");
-        int res = write(fd,buf,5);
-
+        llread(buf);
         tcsetattr(fd,TCSANOW,&oldtio);
         close(fd);
     }
@@ -166,7 +164,7 @@ int llopen(linkLayer connectionParameters)
     newtio.c_lflag = 0;
 
     newtio.c_cc[VTIME]    = 0;   /* inter-character timer unused */
-    newtio.c_cc[VMIN]     = 5;   /* blocking read until 5 chars received */
+    newtio.c_cc[VMIN]     = 1;   /* blocking read until 5 chars received */
 
     /*
     VTIME e VMIN devem ser alterados de forma a proteger com um temporizador a
@@ -178,10 +176,10 @@ int llopen(linkLayer connectionParameters)
 
     if (tcsetattr(fd,TCSANOW,&newtio) == -1) {
         perror("tcsetattr");
-        exit(-1);
+        return -1;
     }
 
-    printf("New termios structure set\n");
+    printf("New termios structure set\nWaiting for SET\n");
 
     while (STOP==FALSE) {       /* loop for input */
         res = read(fd,buf,5); 
@@ -200,6 +198,7 @@ int llopen(linkLayer connectionParameters)
     }
 
     tcsetattr(fd,TCSANOW,&oldtio);
+    STOP=FALSE;
     return (1);
 }
 
@@ -207,9 +206,9 @@ int llwrite(unsigned char *buffer,int length)
 {
     unsigned char send[255];
 
-    send[0]=defW[0];
+    send[0]=0x5c;
 
-    if (connection.role==1) send[1]=defW[1];
+    if (connection.role==1) send[1]=0x01;
     else send[1]=0x03;
 
     send[2] = c;
@@ -225,9 +224,8 @@ int llwrite(unsigned char *buffer,int length)
         send[4+i]=buffer[i];
         bcc2 = bcc2^buffer[i];
     }
-
     send[4+length]=bcc2;
-    send[4+length+1]=defW[0];
+    send[4+length+1]=0x5c;
 
     return write(fd,send,4+length+1);
     //talvez em vez de return, fazer read esperando pelo ACK
@@ -235,49 +233,63 @@ int llwrite(unsigned char *buffer,int length)
 
 int llread(unsigned char *buffer)
 {
-    size = read(fd,response,255);
-
-    for(int i=0;i<size;i+) statemachineRead(response[i]);
-
-    if(state==STOP_STATE_MACHINE)
+    unsigned char dado;
+    while(STOP==FALSE)
     {
-        strcpy(buffer,response);
-        return size;
-        //talvez em vez de return, fazer write do ACK
+        read(fd,&dado,1);
+        statemachineRead(dado);
+        if(state==STOP_STATE_MACHINE)
+        {
+            printf("%s\n",response);
+            STOP=TRUE;
+            unsigned char ack[5];
+            ack[0] = 0x5c;
+            ack[1] = 0x03;
+            if(c==0x01) ack[2] = 0x11;
+            else ack[2] = 0x01;
+            ack[3] = ack[1]^ack[2];
+            ack[4] = 0x05c;
+            write(fd,ack,5);
+            return size;
+        } 
     }
     return -1;
 }
 
-void statemachineRead(unsigned char c)
+void statemachineRead(unsigned char byte)
 {
     switch (state)
     {
         case START:
-            if(byte==defW[0]) state = FLAGRCV;
+            if(byte==0x5c) state = FLAGRCV;
             break;
         case FLAGRCV:
-            if(byte==defW[1]) state = ARCV;
-            else if(byte==defW[0]) state = FLAGRCV;
-            else state = START;   
+            if(byte==0x01) state = ARCV;
+            else if(byte==0x5c) state = FLAGRCV;
+            else state = START; 
             break;
         case ARCV:
-            if(byte==defW[2]) state = CRCV;
-            else if(byte==defW[0]) state = FLAGRCV;
+            if(byte==c) state = CRCV;
+            else if(byte==0x5c) state = FLAGRCV;
             else state = START;
             break;
         case CRCV:
-            if(byte==(defW[3])) state = BCCOK;
-            else if(byte==defW[0]) state = FLAGRCV;
+            if(byte==(0x01^c)) state = BCCOK;
+            else if(byte==0x5c) state = FLAGRCV;
             else state = START; 
             break;  
         case BCCOK:  
-            if(byte==defW[0])
+            if(byte==0x5c)
             {
-                for(int i=0;i<size;i++) bcc2check=bcc2check^response[i];
+                for(int i=0;i<size-1;i++) bcc2check=bcc2check^response[i];
+
                 if (response[size-1]==bcc2check) state = STOP_STATE_MACHINE;
+                if(c==0x01) c=0x00;
+                else c=0x01;
+
                 break;
             }
-            response[size]=c;
+            response[size]=byte;
             size++;
             break;
     }
