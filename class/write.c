@@ -47,6 +47,7 @@ int llopen(linkLayer connectionParamaters);
 int llwrite(unsigned char *buffer, int length);
 int llread(unsigned char *buffer);
 void statemachineAck(unsigned char byte);
+void ByteStuffing (unsigned char *vec, int pos);
 
 int fd;
 struct termios oldtio,newtio;
@@ -212,12 +213,11 @@ int llwrite(unsigned char *buffer,int length)
 
     send[4+length]=bcc2;
     send[4+length+1]=0x5c;
-    for (int j=0; j<4+length+2;j++)
-    {
-        printf("%x\n",send[j]);
 
-    }
 
+    //ByteStuffing
+    //for(int i = 0;i<length;i++) if(send[4+i]==0x5c) ByteStuffing(send,i);
+    
     int tamanho = write(fd,send,4+length+2);
 
     unsigned char ack[5];
@@ -271,4 +271,11 @@ void statemachineAck(unsigned char byte)
             break;
             
     }
+}
+
+void ByteStuffing (unsigned char *vec, int pos)
+{
+    for (int i=254;i>pos+1;i--) vec[i]=vec[i-1]
+    vec[pos]=0x5b;
+    vec[pos+1]=0x7c;
 }
