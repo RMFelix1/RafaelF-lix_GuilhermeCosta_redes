@@ -33,6 +33,7 @@ int state=0;
 #define CRCV 3
 #define BCCOK 4
 #define STOP_STATE_MACHINE 5
+int discState=0;
 
 typedef struct linkLayer{
 char serialPort[50];
@@ -48,6 +49,10 @@ int llwrite(unsigned char *buffer, int length);
 int llread(unsigned char *buffer);
 void statemachineAck(unsigned char byte);
 void ByteStuffing (unsigned char *vec, int pos);
+int llclose(linkLayer connectionParameters);
+int stateMachineClose(unsigned char byte);
+
+
 
 int fd;
 struct termios oldtio,newtio;
@@ -70,7 +75,7 @@ int main(int argc, char** argv)
     strcpy(connection.serialPort,argv[1]);
     connection.role = 0;
     connection.baudRate = BAUDRATE;
-    connection.numTries=0;
+    connection.numTries=3;
     connection.timeOut = TIMEOUT_DEFAULT;
 
     int success = llopen(connection);
@@ -81,11 +86,9 @@ int main(int argc, char** argv)
         strcpy(buf, "SIUU (write)");
         int res = llwrite(buf,13);
 
-        printf("%d",res);
-
-
-        tcsetattr(fd,TCSANOW,&oldtio);
-        close(fd);
+        printf("%d\n",res);
+        printf("LLCLOSING...\n");
+        llclose(connection);
     }
     
     else printf("UNSUCCESSFUL\n");
@@ -150,7 +153,7 @@ int llopen(linkLayer connectionParameters)
     newtio.c_lflag = 0;
 
     newtio.c_cc[VTIME]    = 0;   /* inter-character timer unused */
-    newtio.c_cc[VMIN]     = 5;   /* blocking read until 5 chars received */
+    newtio.c_cc[VMIN]     = 1;   /* blocking read until 5 chars received */
 
     /*
     VTIME e VMIN devem ser alterados de forma a proteger com um temporizador a
@@ -173,18 +176,17 @@ int llopen(linkLayer connectionParameters)
     setter[3]=setter[1]^setter[2];
     setter[4]=setter[0];
 
-    res = write(fd,setter,5);
-    printf("%d bytes written\n",res);
+    write(fd,setter,5);
     
     while (STOP==FALSE) {       /* loop for input */
-        res = read(fd,buf,5); 
+        res = read(fd,buf,1); 
 
-        for(int i=0;i<res;i++) statemachine(buf[i]); 
+        statemachine(buf[0]); 
         printf("STATE IS: %d\n",state);
         if(state==5) STOP=TRUE;
-        state=START;
+        
     }
-
+    state=START;
     tcsetattr(fd,TCSANOW,&oldtio);
     return (1);
 }
@@ -209,6 +211,7 @@ int llwrite(unsigned char *buffer,int length)
     {
         send[4+i]=buffer[i];
         bcc2 = bcc2^buffer[i];
+        printf("Passing %x to sender\n",buffer[i]);
     }
 
     send[4+length]=bcc2;
@@ -217,13 +220,18 @@ int llwrite(unsigned char *buffer,int length)
 
     //ByteStuffing
     //for(int i = 0;i<length;i++) if(send[4+i]==0x5c) ByteStuffing(send,i);
+
+    for(int j = 0;j<4+length+2;j++) printf("Wrote: %x\n",send[j]);
     
     int tamanho = write(fd,send,4+length+2);
 
-    unsigned char ack[5];
-    read(fd,ack,5);
-
-    for(int i=0; i<5;i++) statemachineAck(ack[i]);
+    unsigned char ack;
+    for(int i=0; i<5;i++) 
+    {
+        read(fd,&ack,1);
+        printf("Read (in state: %d): %x\n",state,ack);
+        statemachineAck(ack);
+    }
     if(state==STOP_STATE_MACHINE)
     {
         state=START;
@@ -256,12 +264,13 @@ void statemachineAck(unsigned char byte)
                 else state = START;
             break;
         case CRCV:
+            printf("CONTROL CHECKER IS: %x\n",c);
             if(c==0x00)
-                if(byte==0x03^0x01) state = CRCV;
+                if(byte==0x02) state = BCCOK;
                 else if(byte==0x5c) state = FLAGRCV;
                 else state = START;
             if(c==0x01)
-                if(byte==0x11^0x03) state = CRCV;
+                if(byte==0x12) state = BCCOK;
                 else if(byte==0x5c) state = FLAGRCV;
                 else state = START; 
             break;  
@@ -275,7 +284,63 @@ void statemachineAck(unsigned char byte)
 
 void ByteStuffing (unsigned char *vec, int pos)
 {
-    for (int i=254;i>pos+1;i--) vec[i]=vec[i-1]
+    for (int i=254;i>pos+1;i--) vec[i]=vec[i-1];
     vec[pos]=0x5b;
     vec[pos+1]=0x7c;
+}
+
+int stateMachineClose(unsigned char byte)
+{
+    switch (discState)
+    {
+        case START:
+            if(byte==0x5c) state = FLAGRCV;
+            break;
+        case FLAGRCV:
+            if(byte==0x03) state = ARCV;
+            else if(byte==0x5c) state = FLAGRCV;
+            else state = START;   
+            break;
+        case ARCV:
+            if(byte==0x0a) state = CRCV;
+            else if(byte==0x5c) state = FLAGRCV;
+            else state = START;
+            break;
+        case CRCV:
+            if(byte==0x03^0x0a) state = BCCOK;
+            else if(byte==0x5c) state = FLAGRCV;
+            else state = START; 
+            break;  
+        case BCCOK:  
+            if(byte==0x5c) state = STOP_STATE_MACHINE;
+            else state = START;  
+            break;
+            
+    }
+}
+int llclose(linkLayer connectionParameters)
+{
+    //transmitter
+    printf("Entered llclose\n");
+    unsigned char disc[5];
+    disc[0] = 0x5c;
+    disc[1] = 0x01;
+    disc[2] = 0x0a;
+    disc[3] = 0x01^0x0a;
+    disc[4] = 0x5c;
+    for(int i=0;i<5;i++) printf("Wrote: %x\n",disc[i]);
+    write(fd,disc,5);
+    while(discState!=STOP_STATE_MACHINE)
+    {
+        read(fd,disc,1);
+        stateMachineClose(disc[0]);
+    }
+    disc[0]= 0x5c;
+    disc[1] = 0x01;
+    disc[2] = 0x06;
+    disc[3] = 0x01^0x06;
+    disc[4] = 0x5c;
+    tcsetattr(fd,TCSANOW,&oldtio);
+    close(fd);
+    return 1;
 }
